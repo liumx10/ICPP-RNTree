@@ -1,0 +1,8 @@
+build/*
+builds/*
+.DS_Store
+.vscode/
+*.csv
+*zipfian_data
+.idea/*
+cmake-build*
