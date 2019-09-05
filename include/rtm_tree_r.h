@@ -361,7 +361,7 @@ class Btree : public Index<K, V, size>
     typedef tbb::speculative_spin_rw_mutex speculative_lock_t;
     speculative_lock_t mtx;
 
-    void htmTraverseLeaf(K key, inner_node_t *&parent, leaf_node_t *&leaf)
+    void htmTraverseLeaf(K key, inner_node_t *&parent, leaf_node_t *&leaf, uint64_t& split_version)
     {
         speculative_lock_t::scoped_lock _lock;
 #ifndef NO_CONCURRENT
@@ -378,6 +378,7 @@ class Btree : public Index<K, V, size>
             //std::cout << "[Traverse] " << key << " " << child << std::endl;
         }
         leaf = (leaf_node_t *)child;
+        split_version = leaf->get_version();
 
 #ifndef NO_CONCURRENT
         _lock.release();
@@ -473,8 +474,9 @@ class Btree : public Index<K, V, size>
         else
         {
             leaf_node_t *nleaf;
+            uint64_t sv;
             //TODO: 更精确的函数
-            htmTraverseLeaf(sep, parent, nleaf);
+            htmTraverseLeaf(sep, parent, nleaf, sv);
 
 #ifndef NO_CONCURRENT
             _lock.acquire(mtx);
@@ -571,12 +573,19 @@ class Btree : public Index<K, V, size>
 
         while (true)
         {
-            htmTraverseLeaf(key, parent, leaf);
+            uint64_t sv;
+            htmTraverseLeaf(key, parent, leaf, sv);
             //leaf->_prefetch();
 
             if (remove)
             {
                 leaf->lock();
+                if (sv != leaf->get_version()){
+                    #ifndef NO_CONCURRENT
+                        leaf->unlock();
+                    #endif
+                    continue;
+                }
                 bool res = htmLeafUpdateSlot(leaf, key, -1);
                 flush_data(leaf->slot, 64);
                 memcpy(leaf->dslot, leaf->slot, 64);
@@ -604,6 +613,12 @@ class Btree : public Index<K, V, size>
         #ifndef NO_CONCURRENT
             leaf->lock();
         #endif
+            if (sv != leaf->get_version()){
+                #ifndef NO_CONCURRENT
+                    leaf->unlock();
+                #endif
+                continue;
+            }
 
             htmLeafUpdateSlot(leaf, key, entry);
             //assert(leaf->slot % 64 == 0);
@@ -677,7 +692,8 @@ class Btree : public Index<K, V, size>
         inner_node_t* parent;
         leaf_node_t* leaf;
 
-        htmTraverseLeaf(key, parent, leaf);
+        uint64_t sv;
+        htmTraverseLeaf(key, parent, leaf, sv);
         int pos = leaf->find_key(key);
         while(leaf){
             for(int i=pos; i<=leaf->slot[0]; i++){
@@ -753,7 +769,8 @@ class Btree : public Index<K, V, size>
         t2.start();
     #endif
 
-        htmTraverseLeaf(key, parent, leaf);
+        uint64_t sv;
+        htmTraverseLeaf(key, parent, leaf, sv);
         //leaf->_prefetch();
 
        //return V(-1);
